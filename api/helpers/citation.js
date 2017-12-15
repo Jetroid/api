@@ -111,7 +111,7 @@ function invalidFormat(res) {
 }
 
 function setFileHeaders(res, filename, mimetype){
-  res.setHeader("Content-Disposition","attachment; filename=\"" + filename + "\"");
+  res.setHeader("Content-Disposition", "inline; filename=\"" + filename + "\"");
   res.setHeader("Content-Type", mimetype);
   res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
 }
