@@ -290,15 +290,15 @@ const setHeadersForRes = function(req, res, type, isAll){
 
     if (req.accepts('application/json')){
         res.setHeader('content-type', 'application/json');
-        res.setHeader('content-disposition', 'attachment; filename=\"' + filename + '.json\"');
+        res.setHeader('content-disposition', 'inline; filename=\"' + filename + '.json\"');
         res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
     }else if (req.accepts('application/xml')){
         res.setHeader('content-type', 'application/xml; charset=utf-8');
-        res.setHeader('content-disposition', 'attachment; filename=\"' + filename + '.xml\"');
+        res.setHeader('content-disposition', 'inline; filename=\"' + filename + '.xml\"');
         res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
     }else if (req.accepts('text/csv')){
         res.setHeader('content-type', 'text/csv; charset=utf-8');
-        res.setHeader('content-disposition', 'attachment; filename=\"' + filename + '.csv\"');
+        res.setHeader('content-disposition', 'inline; filename=\"' + filename + '.csv\"');
         res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
     }
 }
