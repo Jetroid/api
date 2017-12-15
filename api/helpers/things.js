@@ -190,8 +190,8 @@ const returnThingByRequest = async function(type, req, res) {
   }
 };
 
-/* Used to return a single thing to the requester, including processes of retrieval, 
- * field filtering, conversion, and sending. 
+/* Used to return a single thing to the requester, including processes of retrieval,
+ * field filtering, conversion, and sending.
  */
 const returnSingleThingByRequest = async function(thingtype, req, res){
     try{
@@ -203,7 +203,7 @@ const returnSingleThingByRequest = async function(thingtype, req, res){
         var thingJson = await getThingByRequest(thingtype, req);
         thingJson = filterFields(thingJson, filterJson);
         var thing = converterFunction(thingJson, true, true, thingtype);
-        
+
         //send data:
         setHeadersForRes(req, res, thingtype, false);
         if(typeof thing == 'object'){
@@ -217,8 +217,8 @@ const returnSingleThingByRequest = async function(thingtype, req, res){
     }
 };
 
-/* Used to return all things of a particular type to the requester, including processes  
- * of retrieval, field filtering, conversion, and sending. 
+/* Used to return all things of a particular type to the requester, including processes
+ * of retrieval, field filtering, conversion, and sending.
  */
 const returnAllThingsByRequest = async function(thingtype, req, res){
     try {
@@ -229,16 +229,16 @@ const returnAllThingsByRequest = async function(thingtype, req, res){
         const ids = await db.any(IDS_FOR_TYPE, { thingtype });
         setHeadersForRes(req, res, thingtype, true);
         var counter = 0;
-    
+
         ids.forEach(async function(row){
             req.params.thingid = Number(row.id);
             var thingJson = await getThingByRequest(thingtype, req);
             thingJson = filterFields(thingJson, filterJson);
             var thing;
-            
+
             thing = converterFunction(thingJson, counter==0, counter == (ids.length-1), thingtype);
             res.write(thing);
-            
+
             counter++;
             if (counter == ids.length){
                 res.end();
@@ -261,13 +261,7 @@ const getParameters = function(req){
         converterFunction = convertObjectToCSV;
     }
 
-    //Only filter if an object is provided.
-    var filterJSON = {};
-    if(typeof req.query.filter == 'string' && req.query.filter != ''){
-        filterJSON = JSON.parse(unescape(req.query.filter));
-    }
-
-    return [converterFunction, filterJSON];
+    return [converterFunction, req.query];
 }
 
 /* Removes all (nested) keys of filterObj from obj.
@@ -276,38 +270,12 @@ const filterFields = function(obj, filterObj){
     if(typeof filterObj != 'object' || filterObj == null){
         return obj;
     }
-    
+
     const keys = Object.keys(filterObj);
     for(var k = 0; k < keys.length; k++){
-        //if null, remove entire object
-        if(filterObj[keys[k]] == null){
-            delete obj[keys[k]];
-        }
-        switch (typeof obj[keys[k]]){
-            case 'object':
-                //Filter fields in nested object. or for all nested objects in array.
-                if (Array.isArray(obj[keys[k]])){
-                    //if an array of single values, just remove and continue.
-                    if(obj[keys[k]].length != 0 && typeof obj[keys[k]][0] != 'object'){
-                        delete obj[keys[k]];
-                        continue;
-                    }
-                    //array of objects, remove any nested fields that need removing.
-                    for(var i = 0; i < obj[keys[k]].length; i++){
-                        filterFields(obj[keys[k]][i], filterObj[keys[k]]);
-                    }
-                }else{
-                    //single object, remove nested fields that need removing.
-                    filterFields(obj[keys[k]], filterObj[keys[k]]);
-                }
-                break;
-            default:
-                //Single value of key to be filtered out.
-                delete obj[keys[k]];
-        }
-        
+        delete obj[keys[k]];
     }
-    
+
     return obj;
 }
 
@@ -549,7 +517,7 @@ function getEditXById(type) {
 }
 
 const getAllFields = async function(req, res) {
-    
+
 
 
 }
