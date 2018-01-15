@@ -52,7 +52,9 @@ const convertObjectToCSV = function(object, type, template, depth=0) {
     if (object.hasOwnProperty(key)) {
       // The object will hold values that are null, arrays, objects, or primitives
       let field = object[key];
-      if (Array.isArray(field)) {
+      if (field === null || field === undefined) {
+        row += delim;
+      } else if (Array.isArray(field)) {
         // field is a list
         row += "KEY" + key + "/KEY" + convertListToCSV(field, template[key][0], depth) + delim;
       } else if (typeof field === 'object') {
