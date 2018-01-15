@@ -8,10 +8,13 @@ const { okToFlipFeatured } = require("./user");
 const { as, db, sql } = require("./db");
 
 const {
-  convertObjectToCSV,
-  convertObjectToXML,
-  getAllJSON
-} = require("./data_converters.js");
+  filterFields,
+  getDataHeader,
+  getObjectConverter,
+  getDataFooter,
+} = require("./data_converters");
+
+const templates = require("./template");
 
 const THING_BY_ID = sql(`../sql/thing_by_id.sql`);
 const INSERT_LOCALIZED_TEXT = sql("../sql/insert_localized_text.sql");
@@ -177,10 +180,70 @@ const getThingByRequest = async function(type, req) {
   return await getThingByType_id_lang_userId(type, thingid, lang, userId);
 };
 
+/* When requesting all things, each thing is processed and streamed independently.
+ * This uses less memory for the server than processing all objects at once
+ */
 const returnThingByRequest = async function(type, req, res) {
   try {
-    const thing = await getThingByRequest(type, req);
-    res.status(200).json({ OK: true, data: thing });
+    const id = req.params.thingid;
+
+    //Filter our template - mostly used for csv stuff.
+    const filter = req.query.filter || {};
+    const template = templates[type + "Template"];
+    const filteredTemplate = filterFields(template, filter);
+
+    // Content negotiate - prefer JSON if available
+    const json = "application/json";
+    const xml = "application/xml";
+    const csv = "text/csv"
+    // JSON if acceptable, otherwise fallback to xml and csv
+    const mimetype = req.accepts([json]) === json ? json : req.accepts([xml, csv]);
+    // Select the converter we'll use later
+    let convertObjectToFormat;
+    if (mimetype) {
+      convertObjectToDataFormat = getObjectConverter(mimetype);
+    } else {
+      return res.status(406).send([json, xml, csv]);
+    }
+
+    // Set the HTTP headers for the "file" we're sending.
+    let ext = "." + mimetype.split("/")[1];
+    const filename = type + "-" + id + ext;
+    setHeadersForFile(res, filename, mimetype);
+
+    // CSV needs header row, XML needs declaration, XML & JSON need start of container
+    // We don't want to add the container for XML & JSON if it's only one thing though.
+    if (mimetype === csv || id === "all") {
+      res.write(getDataHeader(mimetype, type, filteredTemplate));
+    }
+
+    if (id !== "all") {
+      const thing = await getThingByRequest(type, req);
+      res.write(convertObjectToDataFormat(thing, type, filteredTemplate, filter));
+      return res.status(200).end();
+    } else {
+      // Process each thing sequentially
+      const ids = await db.any(IDS_FOR_TYPE, { type });
+      let conversions = ids.reduce((prevPromise, entry) => {
+        return prevPromise.then((wasPrevious) => new Promise(async (resolve) => {
+          // Get the next thing
+          req.params.thingid = Number(entry.id);
+          const thing = await getThingByRequest(type, req);
+          // JSON objects need the delimiter comma
+          if (wasPrevious && mimetype === json) res.write(",");
+          // Convert the object and write it
+          res.write(convertObjectToDataFormat(thing, type, filteredTemplate, filter));
+          resolve(true);
+        }));
+      }, Promise.resolve(false));
+
+      conversions.then(() => {
+        // XML & JSON need end of enclosing object
+        // But we only want to send it when sending multiple things
+        if (id === "all") res.write(getDataFooter(mimetype, type));
+        return res.status(200).end();
+      });
+    }
   } catch (error) {
     log.error("Exception in GET /%s/%s => %s", type, req.params.thingid, error);
     res.status(500).json({
@@ -190,118 +253,13 @@ const returnThingByRequest = async function(type, req, res) {
   }
 };
 
-/* Used to return a single thing to the requester, including processes of retrieval,
- * field filtering, conversion, and sending.
- */
-const returnSingleThingByRequest = async function(thingtype, req, res){
-    try{
-        const interpretedParams = getParameters(req);
-        const converterFunction = interpretedParams[0];
-        const filterJson = interpretedParams[1];
-
-        //Get the data, filter the fields and convert to appropriate format
-        var thingJson = await getThingByRequest(thingtype, req);
-        thingJson = filterFields(thingJson, filterJson);
-        var thing = converterFunction(thingJson, true, true, thingtype);
-
-        //send data:
-        setHeadersForRes(req, res, thingtype, false);
-        if(typeof thing == 'object'){
-            res.status(200).json(thing);
-        }else{
-            res.status(200).send(thing);
-        }
-    }catch(error){
-        log.error("Exception in GET single " + thingtype + " data", req.params.thingid, error);
-        res.status(500).json({ OK: false, error: error });
-    }
-};
-
-/* Used to return all things of a particular type to the requester, including processes
- * of retrieval, field filtering, conversion, and sending.
- */
-const returnAllThingsByRequest = async function(thingtype, req, res){
-    try {
-        const interpretedParams = getParameters(req);
-        const converterFunction = interpretedParams[0];
-        const filterJson = interpretedParams[1];
-
-        const ids = await db.any(IDS_FOR_TYPE, { thingtype });
-        setHeadersForRes(req, res, thingtype, true);
-        var counter = 0;
-
-        ids.forEach(async function(row){
-            req.params.thingid = Number(row.id);
-            var thingJson = await getThingByRequest(thingtype, req);
-            thingJson = filterFields(thingJson, filterJson);
-            var thing;
-
-            thing = converterFunction(thingJson, counter==0, counter == (ids.length-1), thingtype);
-            res.write(thing);
-
-            counter++;
-            if (counter == ids.length){
-                res.end();
-            }
-        });
-    } catch (error) {
-        log.error("Exception in GET all " + thingtype + " data", req.params.thingid, error);
-        res.status(500).json({ OK: false, error: error });
-    }
-};
-
-const getParameters = function(req){
-    //Determine the converter to use. Normal JSON as default.
-    var converterFunction;
-    if (req.accepts('application/json')){
-        converterFunction = getAllJSON; //function(thing, first, last, thingtype){return { OK: true, data: thing }};
-    }else if(req.accepts('application/xml')){
-        converterFunction = convertObjectToXML;
-    }else if(req.accepts('text/csv')){
-        converterFunction = convertObjectToCSV;
-    }
-
-    return [converterFunction, req.query];
-}
-
-/* Removes all (nested) keys of filterObj from obj.
- */
-const filterFields = function(obj, filterObj){
-    if(typeof filterObj != 'object' || filterObj == null){
-        return obj;
-    }
-
-    const keys = Object.keys(filterObj);
-    for(var k = 0; k < keys.length; k++){
-        delete obj[keys[k]];
-    }
-
-    return obj;
-}
-
 /* Sets the res headers for content-type and the attachment file name.
  */
-const setHeadersForRes = function(req, res, type, isAll){
-    //Set attachment file name if xml or csv
-    var filename = type;
-    if(isAll){
-        filename = "all" + type + "s";
-    }
-
-    if (req.accepts('application/json')){
-        res.setHeader('content-type', 'application/json');
-        res.setHeader('content-disposition', 'inline; filename=\"' + filename + '.json\"');
-        res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
-    }else if (req.accepts('application/xml')){
-        res.setHeader('content-type', 'application/xml; charset=utf-8');
-        res.setHeader('content-disposition', 'inline; filename=\"' + filename + '.xml\"');
-        res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
-    }else if (req.accepts('text/csv')){
-        res.setHeader('content-type', 'text/csv; charset=utf-8');
-        res.setHeader('content-disposition', 'inline; filename=\"' + filename + '.csv\"');
-        res.setHeader("Access-Control-Expose-Headers", "Content-Disposition");
-    }
-}
+const setHeadersForFile = function(res, filename, mimetype) {
+  res.set("Content-Type", mimetype);
+  res.set("Content-Disposition", "inline; filename=\"" + filename + "\"");
+  res.set("Access-Control-Expose-Headers", "Content-Disposition");
+};
 
 function getEditXById(type) {
   return async function editById(req, res) {
@@ -514,14 +472,7 @@ function getEditXById(type) {
       console.error("Problem refreshing materialized view: %s", error);
     }
   };
-}
-
-const getAllFields = async function(req, res) {
-
-
-
-}
-
+};
 
 const supportedTypes = ["case", "method", "organization"];
 
@@ -531,9 +482,6 @@ module.exports = {
   getThingByType_id_lang_userId,
   getThingByRequest,
   returnThingByRequest,
-  returnSingleThingByRequest,
-  returnAllThingsByRequest,
-  filterFields,
   diffRelatedList,
   difference,
   getEditXById,

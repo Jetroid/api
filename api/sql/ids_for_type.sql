@@ -3,7 +3,7 @@ SELECT
 FROM
     things
 WHERE
-    things.type = $(thingtype)
+    things.type = $(type)
 ORDER BY
     things.id
 ;

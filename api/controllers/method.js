@@ -3,9 +3,9 @@ const express = require("express");
 const router = express.Router(); // eslint-disable-line new-cap
 const cache = require("apicache");
 const log = require("winston");
-const template = require("../helpers/template");
 
 const { db, sql, as } = require("../helpers/db");
+const { returnTemplate } = require("../helpers/template");
 
 const CREATE_METHOD = sql("../sql/create_method.sql");
 
@@ -14,8 +14,6 @@ const {
   addRelatedList,
   returnThingByRequest,
   getThingByType_id_lang_userId,
-  returnSingleThingByRequest,
-  returnAllThingsByRequest
 } = require("../helpers/things");
 
 
@@ -112,15 +110,48 @@ router.post("/new", async function(req, res) {
 router.put("/:thingid", getEditXById("method"));
 
 /**
- * @api {get} /method/:id Get the last version of a method
+ * @api {get} /method/template Get the template for methods
  * @apiGroup Methods
  * @apiVersion 0.1.0
- * @apiName getMethodById
- * @apiParam {Number} id Method ID
+ * @apiName returnMethodTemplate
  *
  * @apiSuccess {Boolean} OK true if call was successful
  * @apiSuccess {String[]} errors List of error strings (when `OK` is false)
- * @apiSuccess {Object} method data
+ * @apiSuccess {Object} data method template
+ *
+ * @apiSuccessExample Success-Response:
+ *     HTTP/1.1 200 OK
+ *     {
+ *       "OK": true,
+ *       "data": {
+ *         "id": "int",
+ *         "type": "string",
+ *         "original_language": "string",
+ *           ...
+ *        }
+ *     }
+ *
+ * @apiError NotAuthenticated The user is not authenticated
+ * @apiError NotAuthorized The user doesn't have permission to perform this operation.
+ *
+ */
+
+router.get("/template", (req, res) => returnTemplate("method", req, res));
+
+/**
+ * @api {get} /method/:thingid?filter=:filter Get the last version of a method
+ * @apiGroup Methods
+ * @apiVersion 0.1.0
+ * @apiName returnMethodById
+ * @apiParam {Number} thingid Method ID, can be 'all'.
+ * @apiParam {Object} filter URL-encoded JSON object of fields that should not
+ *      be returned with the data. Key of field name, value of false
+ *      eg A value of %7B%22title%22%3Afalse%7D ({"title":false}) specifies
+ *      that the title field should not be included.
+ *
+ * @apiSuccess {Boolean} OK true if call was successful
+ * @apiSuccess {String[]} errors List of error strings (when `OK` is false)
+ * @apiSuccess {Object} data method data
  *
  * @apiSuccessExample Success-Response:
  *     HTTP/1.1 200 OK
@@ -132,23 +163,12 @@ router.put("/:thingid", getEditXById("method"));
  *        }
  *     }
  *
+ * @apiError NotAuthenticated The user is not authenticated
+ * @apiError NotAuthorized The user doesn't have permission to perform this operation.
  *
  */
 
-router.get("/:thingid", function getMethodData(req, res){
-    try{
-        if(req.params.thingid == 'all'){
-             returnAllThingsByRequest("method",req,res);
-        } else if(req.params.thingid == 'fields') {
-	     res.status(200).json(template.methodTemplate);
-	    } else{
-            returnSingleThingByRequest("method",req,res);
-        }
-    }catch (error){
-        log.error("Exception in GET method data", req.params.thingid, error);
-        res.status(500).json({ OK: false, error: error });
-    }
-});
+router.get("/:thingid", (req, res) => returnThingByRequest("method", req, res));
 
 /**
  * @api {delete} /method/:id Delete a method

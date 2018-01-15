@@ -1,296 +1,264 @@
 "use strict";
 const json2xmlparser = require("js2xmlparser");
+const csvDelimiters = [",", "|", "%", "^"];
 
-const knownObjListKeys = {
-    "files":["files_url_list","files_title_list","files_size_list"],
-    "authors":["authors_user_id_list","authors_timestamp_list","authors_name_list"]
-    //TODO Related Cases
-    //TODO Related Methods
-    //TODO Related Organizations
+const filterFields = function(thing, filter) {
+  if (typeof filter !== "object") {
+    return thing;
+  }
+
+  const keys = Object.keys(filter);
+  for (var k = 0; k < keys.length; k++) {
+    const key = keys[k];
+    const value = filter[key];
+    // If the field is falsey, remove it from the thing if possible,
+    // Else if it's an object, it's specifying that part of a
+    // datastructure must be removed.
+    if (!value) {
+      // Check to stop us removing Object.prototype fields
+      if (thing.hasOwnProperty(key)) delete thing[key];
+    } else if (typeof value === "object") {
+      // Filter value is specifying to remove some part(s) of a datastructure
+      // This only makes sense if the data structure is an object or an array
+      // of objects.
+      if (thing.hasOwnProperty(key)) {
+        if (Array.isArray(thing[key]) && typeof thing[key][0] === 'object') {
+          // Data structure is an array of objects
+          let array = thing[key];
+          for (let i = 0; i < array.length; i++) {
+            array[i] = filterFields(array[i], value);
+          }
+        } else if (typeof thing[key] === 'object') {
+          // Data structure is a plain object.
+          thing[key] = filterFields(thing[key], value);
+        }
+      }
+    }
+  }
+  return thing;
+};
+
+const convertToCSV = function(object, type, template, filter) {
+  return convertObjectToCSV(object, type, template) + "\n";
 }
 
+const convertObjectToCSV = function(object, type, template, depth=0) {
+  let row = "";
+  const delim = csvDelimiters[depth];
 
-const convertToCSV = function(jsonList){
-    if(Array.isArray(jsonList) && jsonList.length > 0){
-        //Use the first object to generate the headers, then fill in data.
-        var csv = "";
-        csv = csv + findColumnHeadingsForStructure(jsonList[0]);
-        
-        for (var i = 0; i < jsonList.length; i++){
-            csv = csv + "\n";
-            csv = csv + formatGenericStructure(jsonList[i]);
-        }
-        
-        return csv;
-    }else{
-        return "";
+  const keys = Object.keys(template);
+  for (let k = 0; k < keys.length; k++) {
+    const key = keys[k];
+    if (object.hasOwnProperty(key)) {
+      // The object will hold values that are null, arrays, objects, or primitives
+      let field = object[key];
+      if (Array.isArray(field)) {
+        // field is a list
+        row += "KEY" + key + "/KEY" + convertListToCSV(field, template[key][0], depth) + delim;
+      } else if (typeof field === 'object') {
+        // field is an object
+        row += convertObjectToCSV(field, type, template[key], depth) + delim;
+      } else {
+        // field is a primitive
+        row += escapeCSVCell(String(field)) + delim;
+      }
+    } else {
+      // The object doesn't have the property that the template has
+      // Blank out the field(s) based on the template.
+      row += templateToCSV(template[key], depth);
     }
+  }
+  //remove trailing comma
+  if (row.length > 0) {
+    row = row.slice(0,-1);
+  }
+
+  return row;
 }
 
-
-const convertObjectToCSV = function(jsonObj, first, last, thingtype){
-    var returnStr = "";
-    
-    if(first){
-        returnStr = returnStr + findColumnHeadingsForStructure(jsonObj) + "\n";
+const convertListToCSV = function(list, template, depth) {
+  // We want the values from non-empty lists, or to skip column(s) for empty lists.
+  if (list.length > 0) {
+    // List not empty, add the values
+    if (typeof list[0] !== 'object') {
+      // List of primitives
+      return formatListStructure(list, depth);
+    } else {
+      // List of objects
+      return formatObjectList(list, depth);
     }
-    returnStr = returnStr + formatGenericStructure(jsonObj) + "\n";
-
-    return returnStr;
+  } else {
+    // List is empty
+    // Blank out the field(s) based on the template.
+    return templateToCSV(template, depth);
+  }
 }
 
-const formatGenericStructure = function(jsonObj){
-    var row = "";
-
-    var objKeys = Object.keys(jsonObj);
-    for (var k = 0; k < objKeys.length; k++){
-        var field = jsonObj[objKeys[k]];
-    
-        if(field == null){
-            row = row + ",";
-            continue;
-        }
-    
-        switch(typeof field){
-            case 'object':
-                //Could be an actual object, or an array
-                if (Array.isArray(field)){
-                    //if array has no elements, check known list fields for number of fields to skip
-                    //if we don't know the field, assume flat list.
-                    if (field.length  == 0){
-                        var knownKeys = Object.keys(knownObjListKeys);
-                        if (knownKeys.indexOf(objKeys[k]) != -1){
-                            for (var n = 0; n < knownObjListKeys[objKeys[k]].length -1; n++){
-                               row = row + ","; 
-                            }
-                        }
-                        break;
-                    }
-                    //list of objects or list of primitives?
-                    if (typeof field[0] == 'object'){
-                        row = row + formatObjectList(field);
-                    }else{
-                        row = row + formatListStructure(field);
-                    }
-                }else{
-                    //format an Object on it's own... recursion?
-                    row = row + formatGenericStructure(field);
-                }
-                break;
-            default:
-                row = row + prepareValue(field);
-        }
-        row = row + ",";
-    }
-    
-    //remove extra comma
-    if (row.length !== 0){
-        row = row.slice(0,-1);
-    }
-    
-    return row;
-}
-
-//Should work so long as all object lists contain at least one of its objects :/
-const findColumnHeadingsForStructure = function(jsonObj){
-    var headers = "";
-    var objKeys = Object.keys(jsonObj);
-    for (var k = 0; k < objKeys.length; k++){
-        var field = jsonObj[objKeys[k]];
-    
-        if(field == null){
-            headers = headers + objKeys[k] + ",";
-            continue;
-        }
-    
-        switch(typeof field){
-            case 'object':
-                //Could be an actual object, or an array
-                if (Array.isArray(field)){
-                    //if array has no elements, check in known list keys for headings
-                    if (field.length  == 0){
-                        var knownKeys = Object.keys(knownObjListKeys);
-                        if (knownKeys.indexOf(objKeys[k]) != -1){
-                            var listHeaders = knownObjListKeys[objKeys[k]];
-                            headers = headers + listHeaders[0];
-                            for (var n = 1; n < listHeaders.length; n++){
-                                headers = headers + "," + listHeaders[n];
-                               
-                            }
-                        }else{
-                            //If we don't know this field, assume flat.
-                            headers = headers + objKeys[k]+"_list";
-                        }
-                        break;
-                    }
-                    //list of objects or list of primitives?
-                    if (typeof field[0] == 'object'){
-                        var fieldObjKeys = Object.keys(field[0]);
-                        for (var fk = 0; fk < fieldObjKeys.length; fk++){
-                            if (fk !== 0){
-                                headers = headers + ",";
-                            }
-                            headers = headers + objKeys[k]+"_"+fieldObjKeys[fk]+"_list";
-                        }
-                        
-                    }else{
-                        headers = headers + objKeys[k]+"_list";
-                    }
-                }else{
-                    //headers for Object on it's own
-                    fieldObjKeys = Object.keys(field);
-                    for (var fk = 0; fk < fieldObjKeys.length; fk++){
-                        if (fk !== 0){
-                            headers = headers + ",";
-                        }
-                        headers = headers + objKeys[k]+"_"+fieldObjKeys[fk];
-                    }
-                }
-                break;
-            default:
-                headers = headers + objKeys[k];
-        }
-        headers = headers + ",";
-    }
-    //remove extra comma
-    if (headers.length !== 0){
-        headers = headers.slice(0,-1);
-    }
-    
-    return headers;
-}
-
-
-const formatListStructure = function(list){
-	var formattedList = "";
-	for (var n = 0; n < list.length; n++){
-		if (n != 0){
-			formattedList = formattedList + "|";
+const formatListStructure = function(list, depth) {
+	let formattedList = "";
+	for (let n = 0; n < list.length; n++) {
+		// Add the seperator from the previous interation
+		if (n > 0) {
+			formattedList += csvDelimiters[depth + 1];
 		}
-		formattedList = formattedList + prepareValue(list[n]);
+		formattedList += escapeCSVCell(list[n]);
 	}
-	return escapeBadCharacters(formattedList);
+	return formattedList;
 }
 
-const formatObjectList = function(objList){
-	var listsData = {};
+const formatObjectList = function(list, depth) {
+	const listsData = {};
 
-	//Restructures data from a list of objects to an object containing lists.
-	for (var i = 0; i < objList.length; i++){
-		//loop through all keys for each object.
-		for (var k = 0; k < Object.keys(objList[i]).length; k++){
-			var key = Object.keys(objList[i])[k];
-			//if the key is not seen before, create a new list under the same name. (should only happen on first object)
-			if (!(key in listsData)){
+	// Restructures data from a list of objects to an object containing lists.
+	for (let i = 0; i < list.length; i++) {
+	  const object = list[i];
+		// loop through all keys for each object.
+		const keys = Object.keys(object);
+		for (var k = 0; k < keys.length; k++) {
+			const key = keys[k];
+			// if the key is not seen before, create a new data list for it
+			if (!listsData.hasOwnProperty(key)) {
 				listsData[key] = [];
 			}
-			listsData[key].push(objList[i][key]);
+			if (object.hasOwnProperty(key)) {
+			  listsData[key].push(object[key]);
+			}
 		}
 	}
 
-	//Build a string containing all required columns in this list of objects.
-	var returnString = "";
-	for (var i = 0; i < Object.keys(listsData).length; i++){
-		returnString = returnString + "," + formatListStructure(listsData[Object.keys(listsData)[i]]);
+	// Convert the object containing lists into CSV fields
+	let csvFields = "";
+	let keys = Object.keys(listsData);
+	for (let i = 0; i < keys.length; i++) {
+		csvFields += formatListStructure(listsData[keys[i]], depth) + ",";
 	}
-	//remove leading ","
-	returnString = returnString.substring(1);
-	return returnString;
+	//remove trailing comma
+  if (csvFields.length > 0) {
+    return csvFields.slice(0,-1);
+  }
+	return csvFields;
 }
 
-const formatAuthors = function(authorList){
-	return formatObjectList(authorList);
+const escapeCSVCell = function(cell) {
+  if (cell === null || cell === undefined) return "";
+  cell = String(cell);
+  // If the cell matches double quote, newline, or any of our delimiters,
+  // surround it with double quotes as a form of escaping.
+  if (cell.match(/\"|\n|,|%|\^|\|/)) {
+    // Double quotes are escaped by double-double quoting
+    cell = cell.replace(/"/g, '""');
+    return '\"' + cell + '\"';
+  }
+  return cell;
 }
 
-const formatLocation = function(location){
-	var formattedLocation = prepareValue(location["name"]) + ",";
-	formattedLocation = formattedLocation + prepareValue(location["address1"]) + ",";
-	formattedLocation = formattedLocation + prepareValue(location["address2"]) + ",";
-	formattedLocation = formattedLocation + prepareValue(location["city"]) + ",";
-	formattedLocation = formattedLocation + prepareValue(location["province"]) + ",";
-	formattedLocation = formattedLocation + prepareValue(location["country"]) + ",";
-	formattedLocation = formattedLocation + prepareValue(location["postal_code"]) + ",";
-	formattedLocation = formattedLocation + prepareValue(location["latitude"]) + ",";
-	formattedLocation = formattedLocation + prepareValue(location["longitude"]);
-	return formattedLocation;
+const templateToCSV = function(template, depth) {
+  return templateToCSVHelper(template, depth).slice(0, -1);
 }
 
-
-const prepareValue = function(val){
-	if (val == null){
-		return "";
-	}else {
-		return escapeBadCharacters(String(val));
-	}
-}
-
-const escapeBadCharacters = function(val){
-	val = val.replace(/\n|\r|\r\n/g, "<br />");
-	if (val.indexOf(',') !== -1 || val.indexOf('|') !== -1 || val.indexOf(';') !== -1){
-		var val2 = val.replace(/"/g, '""');
-		return '"' + val2 + '"';
-	}else{
-		return val;
-	}
-}
-
-const convertObjectToXML = function(jsonObj, first, last, thingtype) {
-    //const xmlObject = json2xmlparser.parse("case", jsonObj, {declaration:{include:false}});
-    const xmlObject = json2xmlparser.parse(thingtype, jsonObj);
-    var head = xmlObject.substr(0, xmlObject.indexOf("\n"));
-    var data = xmlObject.substr(xmlObject.indexOf("\n")+1);
-    var out = "";	
-    if(first) {
-	out = out + head;
-        out = out + "\n" +  "<" + thingtype + "s>" + "\n";	    
-    } 
-
-    out = "\t" + out + data + "\n";
-
-    if(last) {
-        out = out + "\n" +  "</" + thingtype + "s>";
+const templateToCSVHelper = function(template, depth) {
+  if (typeof template === "string") {
+    return csvDelimiters[depth];
+  } else if (Array.isArray(template)) {
+    return templateToCSVHelper(template[0], depth);
+  } else if (typeof template === "object") {
+    let columns = "";
+    const keys = Object.keys(template);
+    for (let k = 0; k < keys.length; k++) {
+      const key = keys[k];
+      columns += templateToCSVHelper(template[key], depth);
     }
-
-    return out;
-	
+    return columns;
+  }
 }
 
-const getAllJSON = function(unformatObject, first, last, thingtype) {
+const createHeaderForCSV = function(template) {
+  let header = headerParse("", template);
+  // Remove trailing comma
+  if (header.length !== 0) {
+    return header.slice(0,-1);
+  }
+  return header;
+}
 
-    if(first == true && last == true) {
-      var output = {OK: true, data: unformatObject};
-      return JSON.stringify(output);
-    } else {
-      var result = JSON.stringify(unformatObject);
-      //var head = result.substr(0, result.indexOf("\n"));
-      //var output = result.substr(result.indexOf("\n")+1);
-      var output = "";
+const headerParse = function(name, value, append="", prepend="") {
+  // We construct using the template, so value can be
+  // a string (representing type), a list, or an object.
+  if (typeof value === "string") {
+    return prepend + name + append + ",";
+  } else if (Array.isArray(value)) {
+    const firstInArray = value[0];
+    append += "_list";
 
-      if(first) {
-	    var head = "{ \"OK\":true," + " \"data\":" + "[";
-        output = output + head;
-      }
-      output = output + result;
-
-      if(last) {
-        var end = "] }";
-        output = output + end;
-      }else{
-        output = output + ",";
-      }
+    // Recurse for the value inside the array
+    return headerParse(name, firstInArray, append, prepend);
+  } else if (typeof value === "object") {
+    // Prepend the name of this object to the name of each field
+    if (name.length > 0) prepend = name + "_" + prepend;
+    // Loop through the fields in the object and add them to the csv
+    const keys = Object.keys(value);
+    let header = "";
+    for (let k = 0; k < keys.length; k++) {
+      header += headerParse(keys[k], value[keys[k]], append, prepend);
     }
-    return output;
+    return header;
+  } else {
+    // Shouldn't get here
+    return "";
+  }
+}
 
+const convertToJSON = function (object, type, template, filter) {
+  return JSON.stringify(filterFields(object, filter));
+}
+
+const convertToXML = function (object, type, template, filter) {
+  const options = { declaration: { include: false }};
+  const filteredObject = filterFields(object, filter);
+  return json2xmlparser.parse(type, object, options);
+}
+
+const getDataHeader = function(mimetype, type, template) {
+  if (mimetype === "application/json") {
+    // Literally just the start of the list
+    return "[";
+  } else if (mimetype === "application/xml") {
+    return "<?xml version='1.0'?>\n<" + type + "s>\n"
+  } else if (mimetype === "text/csv") {
+    return createHeaderForCSV(template) + "\n";
+  }
+}
+
+const getDataFooter = function(mimetype, type) {
+  if (mimetype === "application/json") {
+    // Literally just the end of the list
+    return "]";
+  } else if (mimetype === "application/xml") {
+    return "</" + type + "s>\n"
+  } else if (mimetype === "text/csv") {
+    // None needed!
+    return "";
+  }
+}
+
+const getObjectConverter = function(mimetype) {
+  if (mimetype === "application/json") {
+    return convertToJSON;
+  } else if (mimetype === "application/xml") {
+    return convertToXML;
+  } else if (mimetype === "text/csv") {
+    return convertToCSV;
+  }
 }
 
 module.exports = {
-    convertToCSV,
-    convertObjectToCSV,
-    formatGenericStructure,
-    findColumnHeadingsForStructure,
-    prepareValue,
-    formatListStructure,
-    formatObjectList,
-    convertObjectToXML,
-    getAllJSON
+  filterFields,
+  getDataHeader,
+  getObjectConverter,
+  getDataFooter,
+  escapeCSVCell,
+  formatListStructure,
+  formatObjectList,
+  createHeaderForCSV,
+  convertToCSV
 }
